@@ -1,0 +1,4 @@
+{
+  "ignore": ["*.log", "*.err", "node_modules", "frontend"],
+  "ext": "js,mjs,json"
+}
