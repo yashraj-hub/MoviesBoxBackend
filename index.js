@@ -21,10 +21,10 @@ connectDB();
 // Middleware
 const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:5173',
-  'https://moviesbox-alpha.vercel.app',
 ];
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow same-origin requests (no origin header) and local dev
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
