@@ -139,7 +139,10 @@ exports.login = async (req, res, next) => {
     };
 
     // Har login pe sirf ek session rakho — purane sab clear; device context refresh
-    await User.updateOne({ _id: user._id }, { $set: setPayload })
+    const updateResult = await User.updateOne({ _id: user._id }, { $set: setPayload })
+    if (updateResult.modifiedCount === 0) {
+      console.error('[login] session update failed for user:', user._id)
+    }
     if (user.trackingEnabled !== false) {
       await trackEvent(user._id, 'LOGIN', { ip: req.ip });
       await trackDailyLogin(user._id, new Date());
