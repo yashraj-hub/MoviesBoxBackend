@@ -8,7 +8,7 @@ const TMDB_TOKENS = [
 let currentTokenIndex = 0;
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-const TMDB_IMG_BASE = 'https://image.tmdb.org/t/p/w500';       // posters (cards)
+const TMDB_IMG_BASE = 'https://image.tmdb.org/t/p/w342';       // posters (cards)
 const TMDB_IMG_BACKDROP = 'https://image.tmdb.org/t/p/w1280';  // hero/backdrop
 const TMDB_IMG_FACE = 'https://image.tmdb.org/t/p/w185';       // cast/crew
 const TMDB_IMG_LOGO = 'https://image.tmdb.org/t/p/w300';       // company/movie logos

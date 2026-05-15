@@ -80,7 +80,19 @@ exports.updateUserTracking = async (req, res, next) => {
 exports.deleteUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    await User.findByIdAndDelete(id);
+    const user = await User.findById(id).select('userId').lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const uid = user._id.toString()
+
+    await Promise.all([
+      User.findByIdAndDelete(id),
+      DailyLoginStat.deleteMany({ userId: uid }),
+      DailyWatchStat.deleteMany({ userId: uid }),
+      DailySiteActiveStat.deleteMany({ userId: uid }),
+      HiddenContinueWatching.deleteMany({ userId: uid }),
+    ])
+
     res.status(204).send();
   } catch (error) {
     next(error);

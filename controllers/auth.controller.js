@@ -134,15 +134,16 @@ exports.login = async (req, res, next) => {
     };
 
     const setPayload = {
-      sessions: [sessionInfo],
       signupContext: mergeSignupContext(user, signupCtxBody || {}, req),
     };
 
-    // Har login pe sirf ek session rakho — purane sab clear; device context refresh
-    const updateResult = await User.updateOne({ _id: user._id }, { $set: setPayload })
-    if (updateResult.modifiedCount === 0) {
-      console.error('[login] session update failed for user:', user._id)
-    }
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: setPayload,
+        $push: { sessions: sessionInfo },
+      }
+    )
     if (user.trackingEnabled !== false) {
       await trackEvent(user._id, 'LOGIN', { ip: req.ip });
       await trackDailyLogin(user._id, new Date());
