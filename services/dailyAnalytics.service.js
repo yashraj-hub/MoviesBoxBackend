@@ -29,7 +29,7 @@ async function trackDailyLogin(userId, at = new Date()) {
       { userId: String(userId), dayKey },
       {
         $setOnInsert: { dayStartAt, expiresAt },
-        $set: { lastLoginAt: at, expiresAt },
+        $set: { lastLoginAt: at },
         $inc: { loginCount: 1 },
       },
       { upsert: true },

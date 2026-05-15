@@ -33,6 +33,7 @@ const toUserResponse = (user) => ({
   role: user.role || 'user',
   isActive: user.isActive !== false,
   trackingEnabled: user.trackingEnabled !== false,
+  avatar: user.avatar || '',
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
 });
@@ -81,6 +82,7 @@ exports.signup = async (req, res, next) => {
     });
 
     await trackEvent(user._id, 'SIGNUP', { email: user.email });
+    await trackDailyLogin(user._id, new Date());
 
     res.status(201).json({
       message: 'Account created successfully',
@@ -177,6 +179,21 @@ exports.logout = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.updateAvatar = async (req, res, next) => {
+  try {
+    const { avatar } = req.body || {}
+    if (typeof avatar !== 'string') return res.status(400).json({ message: 'avatar is required' })
+    if (avatar !== '' && !avatar.startsWith('https://api.dicebear.com/')) {
+      return res.status(400).json({ message: 'Invalid avatar URL' })
+    }
+    const user = await User.findByIdAndUpdate(req.user.sub, { avatar }, { new: true })
+    if (!user) return res.status(404).json({ message: 'User not found' })
+    res.json({ user: toUserResponse(user) })
+  } catch (error) {
+    next(error)
+  }
+}
 
 exports.changePassword = async (req, res, next) => {
   try {

@@ -41,6 +41,7 @@ const toUserResponse = (user) => ({
   role: user.role,
   isActive: user.isActive,
   trackingEnabled: user.trackingEnabled !== false,
+  avatar: user.avatar || '',
   createdAt: user.createdAt,
   sessions: user.sessions,
   signupContext: user.signupContext
