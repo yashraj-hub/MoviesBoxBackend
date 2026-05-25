@@ -21,6 +21,9 @@ const movieCacheSchema = new mongoose.Schema(
     productionCompanyIds: [Number],
     lastSearchedAt: { type: Date },
     cachedAt: { type: Date, default: Date.now },
+    redFlagged: { type: Boolean, default: false },
+    streamUrl: { type: String, default: '' },
+    flaggedBy: { type: String, default: '' },
   },
   { timestamps: true },
 )

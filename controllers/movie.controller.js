@@ -1,8 +1,10 @@
 const MovieCache = require('../models/MovieCache');
+const TVShowCache = require('../models/TVShowCache');
 const User = require('../models/User');
 const DailyWatchStat = require('../models/DailyWatchStat');
 const HiddenContinueWatching = require('../models/HiddenContinueWatching');
 const { tmdbFetch, syncIfNeeded, saveToCache, TMDB_IMG_BASE, TMDB_IMG_BACKDROP } = require('../services/tmdb.service');
+const { saveShowsToCache, toShowResponse } = require('../services/tvDiscovery.service');
 const { trackEvent } = require('../services/activity.service');
 
 const toMovieResponse = (m) => ({
@@ -31,7 +33,7 @@ exports.browseByCategory = async (req, res, next) => {
     // Sync from TMDB if data is old (6-hour logic in service)
     await syncIfNeeded(category);
 
-    const query = { category };
+    const query = { category, $or: [{ redFlagged: { $ne: true } }, { streamUrl: { $exists: true, $ne: '' } }] };
     const [movies, total] = await Promise.all([
       MovieCache.find(query).sort({ voteAverage: -1 }).skip(skip).limit(limit).lean(),
       MovieCache.countDocuments(query),
@@ -135,6 +137,25 @@ const sortSearchResultsTimeline = (movies) => {
     if (ta == null) return 1;
     if (tb == null) return -1;
     return (b.voteAverage ?? 0) - (a.voteAverage ?? 0);
+  });
+};
+
+const sortSearchTvResults = (shows) => {
+  const firstAirTs = (show) => {
+    const d = show.firstAirDate;
+    if (!d || String(d).length < 4) return null;
+    const t = Date.parse(d);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  return [...shows].sort((a, b) => {
+    const ta = firstAirTs(a);
+    const tb = firstAirTs(b);
+    if (ta != null && tb != null && ta !== tb) return tb - ta;
+    if (ta == null && tb == null) return (b.voteAverage ?? 0) - (a.voteAverage ?? 0);
+    if (ta == null) return 1;
+    if (tb == null) return -1;
+    return (b.popularity ?? 0) - (a.popularity ?? 0);
   });
 };
 
@@ -256,6 +277,80 @@ const buildCollectionSearchPayload = async (enriched) => {
   return { collectionGroups, otherResults };
 };
 
+const searchTvShows = async (q) => {
+  let dbRaw = [];
+  try {
+    dbRaw = await TVShowCache.find({
+      $text: { $search: q },
+    })
+      .sort({ voteAverage: -1, popularity: -1 })
+      .limit(30)
+      .lean();
+  } catch (err) {
+    console.warn('[search] tv $text query failed, falling back to regex only:', err.message);
+  }
+
+  if (dbRaw.length === 0) {
+    const rx = new RegExp(escapeRegex(q), 'i');
+    dbRaw = await TVShowCache.find({
+      $or: [{ name: rx }, { originalName: rx }],
+    })
+      .sort({ voteAverage: -1, popularity: -1 })
+      .limit(30)
+      .lean();
+  }
+
+  let tmdbData = { results: [], total_results: 0, total_pages: 1 };
+  try {
+    tmdbData = await tmdbFetch('search/tv', {
+      query: q,
+      page: 1,
+      include_adult: false,
+      language: 'en-US',
+    });
+  } catch (err) {
+    console.warn('[search] TV TMDB search failed:', err.message);
+  }
+
+  const tmdbMapped = (tmdbData.results || []).map((show) => ({
+    ...toShowResponse(show),
+    mediaType: 'tv',
+  })).filter(Boolean);
+
+  if (tmdbData.results?.length) {
+    await saveShowsToCache(tmdbData.results, null).catch(() => {});
+  }
+
+  const seen = new Set();
+  const merged = [];
+
+  for (const raw of dbRaw) {
+    const show = { ...toShowResponse(raw), mediaType: 'tv' };
+    if (!show?.id || seen.has(show.id)) continue;
+    seen.add(show.id);
+    merged.push(show);
+  }
+
+  for (const show of tmdbMapped) {
+    if (!show?.id || seen.has(show.id)) continue;
+    seen.add(show.id);
+    merged.push(show);
+  }
+
+  const results = sortSearchTvResults(merged).slice(0, 20);
+  const hadDb = dbRaw.length > 0;
+  const hadTmdb = tmdbMapped.length > 0;
+  const source =
+    hadDb && hadTmdb ? 'db+tmdb' : hadDb ? 'db' : hadTmdb ? 'tmdb' : 'none';
+
+  return {
+    results,
+    source,
+    totalResults: tmdbData.total_results || results.length,
+    totalPages: tmdbData.total_pages || 1,
+  };
+};
+
 exports.search = async (req, res, next) => {
   try {
     const q = (req.query.q || '').trim();
@@ -269,7 +364,7 @@ exports.search = async (req, res, next) => {
     // 1) DB — $text (requires text index). On failure or empty, regex on title / originalTitle.
     let dbRaw = [];
     try {
-      dbRaw = await MovieCache.find({ $text: { $search: q } })
+      dbRaw = await MovieCache.find({ $text: { $search: q }, $or: [{ redFlagged: { $ne: true } }, { streamUrl: { $exists: true, $ne: '' } }] })
         .sort({ voteAverage: -1, popularity: -1 })
         .limit(30)
         .lean();
@@ -280,7 +375,10 @@ exports.search = async (req, res, next) => {
     if (dbRaw.length === 0) {
       const rx = new RegExp(escapeRegex(q), 'i');
       dbRaw = await MovieCache.find({
-        $or: [{ title: rx }, { originalTitle: rx }],
+        $and: [
+          { $or: [{ title: rx }, { originalTitle: rx }] },
+          { $or: [{ redFlagged: { $ne: true } }, { streamUrl: { $exists: true, $ne: '' } }] },
+        ],
       })
         .sort({ voteAverage: -1, popularity: -1 })
         .limit(30)
@@ -311,6 +409,8 @@ exports.search = async (req, res, next) => {
       popularity: m.popularity ?? 0,
       category: undefined,
     }));
+
+    const tvSearch = await searchTvShows(q);
 
     // 3) Merge: DB matches first (dedupe), then TMDB — user never loses a TMDB hit
     const seen = new Set();
@@ -363,17 +463,21 @@ exports.search = async (req, res, next) => {
 
     const hadDb = dbRaw.length > 0;
     const hadTmdb = tmdbMapped.length > 0;
+    const tvTotal = tvSearch.totalResults || 0;
     const source =
       hadDb && hadTmdb ? 'db+tmdb' : hadDb ? 'db' : hadTmdb ? 'tmdb' : 'none';
 
     res.json({
       results,
+      tvResults: tvSearch.results,
       collectionGroups,
       otherResults,
       source,
+      tvSource: tvSearch.source,
       page: 1,
-      totalResults: tmdbData.total_results || results.length,
+      totalResults: (tmdbData.total_results || results.length) + tvTotal,
       totalPages: tmdbData.total_pages || 1,
+      tvTotalResults: tvTotal,
     });
   } catch (error) {
     next(error);

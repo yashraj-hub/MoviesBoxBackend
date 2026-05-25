@@ -33,6 +33,7 @@ const toUserResponse = (user) => ({
   role: user.role || 'user',
   isActive: user.isActive !== false,
   trackingEnabled: user.trackingEnabled !== false,
+  canFlag: user.canFlag === true,
   avatar: user.avatar || '',
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 const User = require('../models/User')
+const MovieCache = require('../models/MovieCache')
 const analyticsConn = require('../config/databases/analytics')
 const DailyLoginStat = require('../models/DailyLoginStat')
 const DailyWatchStat = require('../models/DailyWatchStat')
@@ -41,6 +42,7 @@ const toUserResponse = (user) => ({
   role: user.role,
   isActive: user.isActive,
   trackingEnabled: user.trackingEnabled !== false,
+  canFlag: user.canFlag === true,
   avatar: user.avatar || '',
   createdAt: user.createdAt,
   sessions: user.sessions,
@@ -348,6 +350,86 @@ exports.getUserAnalytics = async (req, res, next) => {
       },
       timeline,
     })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Reset a user's password (admin)
+exports.resetUserPassword = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { newPassword } = req.body
+    if (!newPassword || String(newPassword).length < 6)
+      return res.status(400).json({ message: 'Password must be at least 6 characters' })
+    const bcrypt = require('bcryptjs')
+    const hashed = await bcrypt.hash(String(newPassword), 10)
+    const user = await User.findByIdAndUpdate(id, { password: hashed }, { new: true })
+    if (!user) return res.status(404).json({ message: 'User not found' })
+    res.json({ ok: true })
+  } catch (err) { next(err) }
+}
+
+// Toggle canFlag permission
+exports.updateCanFlag = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { canFlag } = req.body
+    const user = await User.findByIdAndUpdate(id, { canFlag: canFlag === true }, { new: true })
+    if (!user) return res.status(404).json({ message: 'User not found' })
+    res.json({ user: toUserResponse(user) })
+  } catch (err) { next(err) }
+}
+
+// Flag/unflag a movie + optional custom stream URL
+exports.flagMovie = async (req, res, next) => {
+  try {
+    const tmdbId = parseInt(req.params.tmdbId)
+    if (!tmdbId) return res.status(400).json({ message: 'Invalid tmdbId' })
+
+    const { redFlagged, streamUrl = '', flaggedBy = '' } = req.body
+    if (typeof redFlagged !== 'boolean') return res.status(400).json({ message: 'redFlagged (boolean) is required' })
+
+    const cleanUrl = String(streamUrl || '').trim()
+    if (cleanUrl && !/^https?:\/\//i.test(cleanUrl)) {
+      return res.status(400).json({ message: 'Invalid stream URL' })
+    }
+
+    const movie = await MovieCache.findOneAndUpdate(
+      { tmdbId },
+      { $set: { redFlagged, streamUrl: cleanUrl, flaggedBy: redFlagged ? String(flaggedBy || '').trim() : '' } },
+      { new: true, upsert: false }
+    ).lean()
+
+    if (!movie) return res.status(404).json({ message: 'Movie not found in cache' })
+
+    res.json({
+      ok: true,
+      tmdbId: movie.tmdbId,
+      title: movie.title,
+      redFlagged: movie.redFlagged,
+      streamUrl: movie.streamUrl || '',
+      flaggedBy: movie.flaggedBy || '',
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Get all red-flagged movies
+exports.getFlaggedMovies = async (req, res, next) => {
+  try {
+    const movies = await MovieCache.find({ redFlagged: true })
+      .select('tmdbId title posterPath redFlagged streamUrl flaggedBy')
+      .lean()
+    res.json({ items: movies.map(m => ({
+      tmdbId: m.tmdbId,
+      title: m.title,
+      posterUrl: m.posterPath ? `https://image.tmdb.org/t/p/w342${m.posterPath}` : null,
+      redFlagged: m.redFlagged,
+      streamUrl: m.streamUrl || '',
+      flaggedBy: m.flaggedBy || '',
+    })) })
   } catch (err) {
     next(err)
   }

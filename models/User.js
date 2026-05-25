@@ -46,6 +46,7 @@ const userSchema = new mongoose.Schema(
         new mongoose.Schema(
           {
             tmdbId: { type: Number, required: true },
+            mediaType: { type: String, enum: ['movie', 'tv'], default: 'movie' },
             title: { type: String, default: '' },
             posterUrl: { type: String, default: '' },
             addedAt: { type: Date, default: Date.now },
@@ -91,6 +92,10 @@ const userSchema = new mongoose.Schema(
     avatar: {
       type: String,
       default: '',
+    },
+    canFlag: {
+      type: Boolean,
+      default: false,
     },
     signupContext: {
       client: {

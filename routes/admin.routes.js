@@ -28,5 +28,8 @@ router.get('/analytics/users/:userId/watch-history', adminController.getUserWatc
 router.delete('/analytics/users/:userId/watch-history', adminController.deleteUserWatchHistory);
 router.get('/analytics/live-watchers', adminController.getLiveWatchers);
 router.get('/users/:userId/my-list', adminController.getUserMyList);
+router.patch('/users/:id/password', adminController.resetUserPassword);
+router.patch('/users/:id/can-flag', adminController.updateCanFlag);
+router.get('/movies/flagged', adminController.getFlaggedMovies);
 
 module.exports = router;

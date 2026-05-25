@@ -58,13 +58,20 @@ exports.getMovieDetail = async (req, res, next) => {
     const id = parseInt(req.params.tmdbId)
     if (!id) return res.status(400).json({ message: 'Invalid movie ID' })
 
+    const cached = await MovieCache.findOne({ tmdbId: id }).select('redFlagged streamUrl flaggedBy').lean()
+
     const data = await tmdbFetch(`movie/${id}`, {
       language: 'en-US',
       append_to_response: 'credits,videos,images',
       include_image_language: 'en,null',
     })
 
-    res.json(formatMovie(data))
+    const formatted = formatMovie(data)
+    formatted.redFlagged = cached?.redFlagged || false
+    formatted.streamUrl = cached?.streamUrl || ''
+    formatted.flaggedBy = cached?.flaggedBy || ''
+
+    res.json(formatted)
   } catch (err) {
     next(err)
   }
@@ -85,13 +92,14 @@ exports.getRelatedMovies = async (req, res, next) => {
     const category = source?.category
 
     if (category) {
+      const flagFilter = { $or: [{ redFlagged: { $ne: true } }, { streamUrl: { $exists: true, $ne: '' } }] }
       const [results, total] = await Promise.all([
-        MovieCache.find({ category, tmdbId: { $ne: id } })
+        MovieCache.find({ category, tmdbId: { $ne: id }, ...flagFilter })
           .sort({ voteAverage: -1 })
           .skip(skip)
           .limit(limit)
           .lean(),
-        MovieCache.countDocuments({ category, tmdbId: { $ne: id } }),
+        MovieCache.countDocuments({ category, tmdbId: { $ne: id }, ...flagFilter }),
       ])
 
       if (results.length > 0) {
