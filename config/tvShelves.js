@@ -3,6 +3,108 @@ const TV_SHELVES = {
     label: 'Trending Now',
     type: 'trending',
   },
+  netflix: {
+    label: 'Netflix Originals',
+    query: {
+      with_networks: '213',
+      sort_by: 'popularity.desc',
+    },
+  },
+  primeVideo: {
+    label: 'Prime Video Picks',
+    query: {
+      with_networks: '1024',
+      sort_by: 'popularity.desc',
+    },
+  },
+  hulu: {
+    label: 'Hulu Originals',
+    query: {
+      with_networks: '453',
+      sort_by: 'popularity.desc',
+    },
+  },
+  disneyPlus: {
+    label: 'Disney+ Favorites',
+    query: {
+      with_networks: '2739',
+      sort_by: 'popularity.desc',
+    },
+  },
+  appleTVPlus: {
+    label: 'Apple TV+ Originals',
+    query: {
+      with_networks: '2552',
+      sort_by: 'popularity.desc',
+    },
+  },
+  peacock: {
+    label: 'Peacock Picks',
+    query: {
+      with_networks: '3353',
+      sort_by: 'popularity.desc',
+    },
+  },
+  paramountPlus: {
+    label: 'Paramount+ Selects',
+    query: {
+      with_networks: '4330',
+      sort_by: 'popularity.desc',
+    },
+  },
+  hbo: {
+    label: 'HBO Classics',
+    query: {
+      with_networks: '49',
+      sort_by: 'popularity.desc',
+    },
+  },
+  cartoonNetwork: {
+    label: 'Cartoon Network Classics',
+    query: {
+      with_networks: '56',
+      sort_by: 'popularity.desc',
+    },
+  },
+  nickelodeon: {
+    label: 'Nickelodeon Throwbacks',
+    query: {
+      with_networks: '13',
+      sort_by: 'popularity.desc',
+    },
+  },
+  hungama: {
+    label: 'Hungama Anime',
+    query: {
+      with_original_language: 'ja',
+      with_genres: '16,35,10759,10765',
+      'first_air_date.lte': '2015-12-31',
+      sort_by: 'first_air_date.desc',
+    },
+  },
+  disneyChannel: {
+    label: 'Disney Channel Favorites',
+    query: {
+      with_networks: '54',
+      sort_by: 'popularity.desc',
+    },
+  },
+  englishThrowbacks: {
+    label: 'English Throwbacks',
+    query: {
+      with_original_language: 'en',
+      'first_air_date.lte': '2010-12-31',
+      sort_by: 'popularity.desc',
+    },
+  },
+  ninetyKids: {
+    label: '90s Kids Memories',
+    query: {
+      'first_air_date.lte': '2004-12-31',
+      with_genres: '16,35,10751,10759,10765',
+      sort_by: 'first_air_date.asc',
+    },
+  },
   topRated: {
     label: 'Top Rated of All Time',
     query: {

@@ -10,6 +10,7 @@ const tvShowCacheSchema = new mongoose.Schema(
     posterPath: { type: String, default: '' },
     backdropPath: { type: String, default: '' },
     genreIds: { type: [Number], default: [] },
+    networkIds: { type: [Number], default: [] },
     originCountry: { type: [String], default: [] },
     firstAirDate: { type: String, default: '' },
     popularity: { type: Number, default: 0 },
@@ -29,6 +30,7 @@ const tvShowCacheSchema = new mongoose.Schema(
 tvShowCacheSchema.index({ name: 'text', originalName: 'text' })
 tvShowCacheSchema.index({ originalLanguage: 1, voteAverage: -1 })
 tvShowCacheSchema.index({ genreIds: 1, voteAverage: -1 })
+tvShowCacheSchema.index({ networkIds: 1, popularity: -1 })
 tvShowCacheSchema.index({ originCountry: 1, popularity: -1 })
 tvShowCacheSchema.index({ shelfKeys: 1, popularity: -1 })
 tvShowCacheSchema.index({ firstAirDate: -1 })

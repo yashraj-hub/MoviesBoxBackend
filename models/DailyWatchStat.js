@@ -46,7 +46,7 @@ const dailyWatchStatSchema = new mongoose.Schema(
         default: [],
       },
     },
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   {
     timestamps: true,

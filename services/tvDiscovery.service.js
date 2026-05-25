@@ -1,5 +1,5 @@
 const TVShowCache = require('../models/TVShowCache')
-const { tmdbFetch, TMDB_IMG_BASE, TMDB_IMG_BACKDROP } = require('./tmdb.service')
+const { tmdbFetch, TMDB_IMG_BASE, TMDB_IMG_BACKDROP, TMDB_IMG_LOGO } = require('./tmdb.service')
 
 const clampPage = (value) => Math.max(1, parseInt(value, 10) || 1)
 const clampLimit = (value, fallback = 20) => Math.min(40, Math.max(1, parseInt(value, 10) || fallback))
@@ -21,6 +21,10 @@ const buildTvDbFilter = (query = {}) => {
   }
   if (genreIds.length) {
     filter.genreIds = genreIds.length === 1 ? genreIds[0] : { $in: genreIds }
+  }
+  const networkIds = parseIdList(query.with_networks)
+  if (networkIds.length) {
+    filter.networkIds = networkIds.length === 1 ? networkIds[0] : { $in: networkIds }
   }
   if (excludedGenreIds.length) {
     if (filter.genreIds && typeof filter.genreIds === 'object') {
@@ -84,6 +88,11 @@ const normalizeShow = (show) => {
     : Array.isArray(show.originCountry)
       ? show.originCountry
       : []
+  const networkIds = Array.isArray(show.networks)
+    ? show.networks.map((network) => Number(network?.id)).filter((n) => Number.isFinite(n))
+    : Array.isArray(show.networkIds)
+      ? show.networkIds.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      : []
 
   return {
     tmdbId: id,
@@ -93,6 +102,7 @@ const normalizeShow = (show) => {
     overview: show.overview || '',
     posterPath,
     backdropPath,
+    logoUrl: show.logoUrl || null,
     genreIds: Array.isArray(show.genre_ids)
       ? show.genre_ids.map((n) => Number(n)).filter((n) => Number.isFinite(n))
       : Array.isArray(show.genreIds)
@@ -101,6 +111,7 @@ const normalizeShow = (show) => {
           ? show.genres.map((g) => Number(g?.id)).filter((n) => Number.isFinite(n))
           : [],
     originCountry: originalCountry.map((c) => String(c)).filter(Boolean),
+    networkIds,
     firstAirDate: show.first_air_date || show.firstAirDate || '',
     popularity: Number(show.popularity) || 0,
     voteAverage: Number(show.vote_average ?? show.voteAverage) || 0,
@@ -130,8 +141,10 @@ const toShowResponse = (show) => {
     overview: normalized.overview || '',
     posterUrl: normalized.posterPath ? `${TMDB_IMG_BASE}${normalized.posterPath}` : null,
     backdropUrl: normalized.backdropPath ? `${TMDB_IMG_BACKDROP}${normalized.backdropPath}` : null,
+    logoUrl: normalized.logoUrl || null,
     genreIds: normalized.genreIds,
     originCountry: normalized.originCountry,
+    networkIds: normalized.networkIds,
     firstAirDate: normalized.firstAirDate || null,
     popularity: normalized.popularity,
     voteAverage: Number.isFinite(normalized.voteAverage) ? Number(normalized.voteAverage.toFixed(1)) : null,
@@ -141,6 +154,12 @@ const toShowResponse = (show) => {
     status: normalized.status || null,
     type: normalized.type || null,
   }
+}
+
+const pickLogo = (images) => {
+  const logos = images?.logos || []
+  const logo = logos.find((item) => item.iso_639_1 === 'en') || logos.find((item) => !item.iso_639_1) || logos[0]
+  return logo?.file_path ? `${TMDB_IMG_LOGO}${logo.file_path}` : null
 }
 
 const saveShowsToCache = async (shows, shelfKey = null) => {
@@ -164,6 +183,7 @@ const saveShowsToCache = async (shows, shelfKey = null) => {
           backdropPath: show.backdropPath,
           genreIds: show.genreIds,
           originCountry: show.originCountry,
+          networkIds: show.networkIds,
           firstAirDate: show.firstAirDate,
           popularity: show.popularity,
           voteAverage: show.voteAverage,
@@ -214,12 +234,41 @@ const buildDiscoverResponse = async ({
     }
   }
 
-  const tmdbData = await tmdbFetch('discover/tv', {
-    ...query,
-    page: pageNumber,
-    language: 'en-US',
-    include_adult: 'false',
-  })
+  let tmdbData = null
+  try {
+    tmdbData = await tmdbFetch('discover/tv', {
+      ...query,
+      page: pageNumber,
+      language: 'en-US',
+      include_adult: 'false',
+    })
+  } catch (error) {
+    const cachedFallback = await TVShowCache.find(dbFilter)
+      .sort(dbSort)
+      .skip(skip)
+      .limit(pageSize)
+      .lean()
+
+    if (cachedFallback.length) {
+      return {
+        results: cachedFallback.map(toShowResponse).filter(Boolean),
+        page: pageNumber,
+        totalResults: totalCached,
+        totalPages: Math.max(1, Math.ceil(totalCached / pageSize), pageNumber),
+        hasMore: false,
+        source: 'db-fallback',
+      }
+    }
+
+    return {
+      results: [],
+      page: pageNumber,
+      totalResults: totalCached,
+      totalPages: Math.max(1, Math.ceil(totalCached / pageSize), pageNumber),
+      hasMore: false,
+      source: 'empty-fallback',
+    }
+  }
 
   const results = (tmdbData.results || []).map(normalizeShow).filter(Boolean)
   await saveShowsToCache(results, shelfKey)
@@ -237,17 +286,54 @@ const buildDiscoverResponse = async ({
 const getTrendingShows = async (limit = 10, page = 1) => {
   const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 20)
   const pageNumber = clampPage(page)
-  const data = await tmdbFetch('trending/tv/day', { language: 'en-US', page: pageNumber })
+  let data = null
+  try {
+    data = await tmdbFetch('trending/tv/day', { language: 'en-US', page: pageNumber })
+  } catch (error) {
+    const cached = await TVShowCache.find({ shelfKeys: 'trending' })
+      .sort({ popularity: -1, voteAverage: -1, voteCount: -1, firstAirDate: -1 })
+      .limit(pageSize)
+      .lean()
+
+    return {
+      results: cached.map(toShowResponse).filter(Boolean),
+      totalResults: cached.length,
+      totalPages: 1,
+      hasMore: false,
+      page: pageNumber,
+      source: 'db-fallback',
+      window: 'day',
+      limit: pageSize,
+    }
+  }
   const picks = (data.results || [])
     .filter((show) => show?.id)
     .slice(0, pageSize)
     .map(normalizeShow)
     .filter(Boolean)
 
-  await saveShowsToCache(picks, 'trending')
+  const enrichedPicks = await Promise.all(
+    picks.map(async (show) => {
+      try {
+        const detail = await tmdbFetch(`tv/${show.tmdbId}`, {
+          language: 'en-US',
+          append_to_response: 'images',
+          include_image_language: 'en,null',
+        })
+        return {
+          ...show,
+          logoUrl: pickLogo(detail.images),
+        }
+      } catch {
+        return { ...show, logoUrl: null }
+      }
+    }),
+  )
+
+  await saveShowsToCache(enrichedPicks, 'trending')
 
   return {
-    results: picks.map(toShowResponse).filter(Boolean),
+    results: enrichedPicks.map(toShowResponse).filter(Boolean),
     totalResults: data.total_results || picks.length,
     totalPages: data.total_pages || 1,
     hasMore: pageNumber < Math.min(Number(data.total_pages) || 1, 500),

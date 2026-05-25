@@ -8,7 +8,7 @@ const dailyLoginStatSchema = new mongoose.Schema(
     dayStartAt: { type: Date, required: true, index: true },
     loginCount: { type: Number, default: 0 },
     lastLoginAt: { type: Date, default: null },
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   {
     timestamps: true,

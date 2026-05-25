@@ -7,7 +7,7 @@ const dailySiteActiveStatSchema = new mongoose.Schema(
     dayKey: { type: String, required: true, index: true },
     dayStartAt: { type: Date, required: true, index: true },
     siteActiveSeconds: { type: Number, default: 0 },
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   {
     timestamps: true,
