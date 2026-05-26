@@ -25,6 +25,15 @@ const createToken = (user, jti) =>
     { expiresIn: '7d' }
   );
 
+const runAuthAnalytics = (userId, eventType, metadata = {}, at = new Date()) => {
+  setImmediate(() => {
+    Promise.allSettled([
+      trackEvent(userId, eventType, metadata),
+      trackDailyLogin(userId, at),
+    ]).catch(() => {})
+  })
+};
+
 const toUserResponse = (user) => ({
   id: user._id.toString(),
   userId: user.userId,
@@ -82,8 +91,7 @@ exports.signup = async (req, res, next) => {
       }],
     });
 
-    await trackEvent(user._id, 'SIGNUP', { email: user.email });
-    await trackDailyLogin(user._id, new Date());
+    runAuthAnalytics(user._id, 'SIGNUP', { email: user.email });
 
     res.status(201).json({
       message: 'Account created successfully',
@@ -148,8 +156,7 @@ exports.login = async (req, res, next) => {
       }
     )
     if (user.trackingEnabled !== false) {
-      await trackEvent(user._id, 'LOGIN', { ip: req.ip });
-      await trackDailyLogin(user._id, new Date());
+      runAuthAnalytics(user._id, 'LOGIN', { ip: req.ip });
     }
 
     res.json({ user: toUserResponse(user), token });

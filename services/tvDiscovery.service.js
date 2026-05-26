@@ -10,6 +10,8 @@ const parseIdList = (value) =>
     .map((part) => parseInt(part, 10))
     .filter((n) => Number.isFinite(n))
 
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const buildTvDbFilter = (query = {}) => {
   const filter = {}
   const genreIds = parseIdList(query.with_genres)
@@ -76,6 +78,52 @@ const buildTvDbSort = (query = {}) => {
     default:
       return { popularity: -1, voteAverage: -1, voteCount: -1, firstAirDate: -1 }
   }
+}
+
+const matchesTvQuery = (show, query = {}) => {
+  const genreIds = parseIdList(query.with_genres)
+  const excludedGenreIds = parseIdList(query.without_genres)
+  const networkIds = parseIdList(query.with_networks)
+  const showGenreIds = Array.isArray(show.genreIds) ? show.genreIds : []
+  const showNetworkIds = Array.isArray(show.networkIds) ? show.networkIds : []
+
+  if (query.with_original_language && show.originalLanguage !== String(query.with_original_language)) return false
+  if (query.with_origin_country) {
+    const countries = String(query.with_origin_country).split(',').filter(Boolean)
+    if (countries.length && !countries.some((country) => show.originCountry?.includes(country))) return false
+  }
+  if (genreIds.length && !genreIds.some((id) => showGenreIds.includes(id))) return false
+  if (excludedGenreIds.length && excludedGenreIds.some((id) => showGenreIds.includes(id))) return false
+  if (networkIds.length && !networkIds.some((id) => showNetworkIds.includes(id))) return false
+
+  if (query['first_air_date.gte'] && String(show.firstAirDate || '') < String(query['first_air_date.gte'])) return false
+  if (query['first_air_date.lte'] && String(show.firstAirDate || '') > String(query['first_air_date.lte'])) return false
+  if (query['vote_average.gte'] && Number(show.voteAverage || 0) < Number(query['vote_average.gte'])) return false
+  if (query['vote_average.lte'] && Number(show.voteAverage || 0) > Number(query['vote_average.lte'])) return false
+  if (query['vote_count.gte'] && Number(show.voteCount || 0) < Number(query['vote_count.gte'])) return false
+  if (query['vote_count.lte'] && Number(show.voteCount || 0) > Number(query['vote_count.lte'])) return false
+
+  return true
+}
+
+const sortShowsForQuery = (shows, query = {}) => {
+  const sort = buildTvDbSort(query)
+  const entries = Object.entries(sort)
+
+  return [...shows].sort((a, b) => {
+    for (const [key, direction] of entries) {
+      const av = a[key]
+      const bv = b[key]
+      if (av === bv) continue
+      if (av == null || av === '') return 1
+      if (bv == null || bv === '') return -1
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return direction < 0 ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv))
+      }
+      return direction < 0 ? Number(bv || 0) - Number(av || 0) : Number(av || 0) - Number(bv || 0)
+    }
+    return 0
+  })
 }
 
 const normalizeShow = (show) => {
@@ -283,6 +331,117 @@ const buildDiscoverResponse = async ({
   }
 }
 
+const buildShelfSearchResponse = async ({
+  query = {},
+  search = '',
+  page = 1,
+  limit = 20,
+  shelfKey = null,
+}) => {
+  const q = String(search || '').trim()
+  const pageNumber = clampPage(page)
+  const pageSize = clampLimit(limit, 20)
+  const skip = (pageNumber - 1) * pageSize
+  const dbFilter = buildTvDbFilter(query)
+  const dbSort = buildTvDbSort(query)
+  const rx = new RegExp(escapeRegex(q), 'i')
+
+  let dbRows = []
+  if (q.length >= 2) {
+    try {
+      dbRows = await TVShowCache.find({
+        ...dbFilter,
+        $text: { $search: q },
+      })
+        .sort(dbSort)
+        .limit(80)
+        .lean()
+    } catch {
+      dbRows = []
+    }
+
+    if (!dbRows.length) {
+      dbRows = await TVShowCache.find({
+        ...dbFilter,
+        $or: [{ name: rx }, { originalName: rx }],
+      })
+        .sort(dbSort)
+        .limit(80)
+        .lean()
+    }
+  }
+
+  let tmdbRows = []
+  if (q.length >= 2) {
+    const searchPages = 3
+    for (let tmdbPage = 1; tmdbPage <= searchPages; tmdbPage += 1) {
+      try {
+        const data = await tmdbFetch('search/tv', {
+          query: q,
+          page: tmdbPage,
+          include_adult: 'false',
+          language: 'en-US',
+        })
+        tmdbRows.push(...(Array.isArray(data?.results) ? data.results : []))
+        if (tmdbPage >= Math.min(Number(data?.total_pages) || 1, searchPages)) break
+      } catch {
+        break
+      }
+    }
+  }
+
+  const needsNetworkDetail = parseIdList(query.with_networks).length > 0
+  const normalizedTmdbRows = await Promise.all(
+    tmdbRows.map(async (row) => {
+      if (!needsNetworkDetail) return normalizeShow(row)
+      try {
+        const detail = await tmdbFetch(`tv/${row.id}`, { language: 'en-US' })
+        return normalizeShow({
+          ...row,
+          networks: detail.networks,
+          number_of_seasons: detail.number_of_seasons,
+          number_of_episodes: detail.number_of_episodes,
+          status: detail.status,
+          type: detail.type,
+        })
+      } catch {
+        return normalizeShow(row)
+      }
+    }),
+  )
+
+  const seen = new Set()
+  const merged = []
+  for (const row of dbRows.map(normalizeShow).filter(Boolean)) {
+    if (seen.has(row.tmdbId)) continue
+    seen.add(row.tmdbId)
+    merged.push(row)
+  }
+  for (const row of normalizedTmdbRows.filter(Boolean)) {
+    if (seen.has(row.tmdbId)) continue
+    if (!matchesTvQuery(row, query)) continue
+    seen.add(row.tmdbId)
+    merged.push(row)
+  }
+
+  const sorted = sortShowsForQuery(merged, query)
+  const paged = sorted.slice(skip, skip + pageSize)
+
+  if (paged.length) {
+    await saveShowsToCache(paged, shelfKey).catch(() => {})
+  }
+
+  return {
+    results: paged.map(toShowResponse).filter(Boolean),
+    page: pageNumber,
+    totalResults: sorted.length,
+    totalPages: Math.max(1, Math.ceil(sorted.length / pageSize)),
+    hasMore: skip + pageSize < sorted.length,
+    source: dbRows.length && tmdbRows.length ? 'db+tmdb-search' : dbRows.length ? 'db-search' : 'tmdb-search',
+    query: q,
+  }
+}
+
 const getTrendingShows = async (limit = 10, page = 1) => {
   const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 20)
   const pageNumber = clampPage(page)
@@ -391,6 +550,7 @@ const buildRelatedResponse = async ({ tvId, page = 1, limit = 20 }) => {
 module.exports = {
   buildRelatedResponse,
   buildDiscoverResponse,
+  buildShelfSearchResponse,
   buildTvDbFilter,
   buildTvDbSort,
   getTrendingShows,

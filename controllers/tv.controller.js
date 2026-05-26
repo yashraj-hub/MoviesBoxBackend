@@ -3,6 +3,7 @@ const { TV_GENRES } = require('../config/tvGenres')
 const { TV_SHELVES } = require('../config/tvShelves')
 const {
   buildDiscoverResponse,
+  buildShelfSearchResponse,
   buildRelatedResponse,
   getTrendingShows,
   saveShowsToCache,
@@ -11,6 +12,33 @@ const {
 } = require('../services/tvDiscovery.service')
 
 const TMDB_IMG_STILL = 'https://image.tmdb.org/t/p/w780'
+
+const TV_SORT_QUERIES = {
+  topRated: {
+    sort_by: 'vote_average.desc',
+    'vote_count.gte': '50',
+  },
+  latest: {
+    sort_by: 'first_air_date.desc',
+  },
+  mostReviewed: {
+    sort_by: 'vote_count.desc',
+  },
+}
+
+const applyTVSort = (query = {}, sortKey = 'topRated', options = {}) => {
+  const sortQuery = TV_SORT_QUERIES[sortKey] || TV_SORT_QUERIES.topRated
+  const nextQuery = {
+    ...query,
+    sort_by: sortQuery.sort_by,
+  }
+
+  if (options.includeVoteFloor !== false && sortQuery['vote_count.gte'] && !nextQuery['vote_count.gte']) {
+    nextQuery['vote_count.gte'] = sortQuery['vote_count.gte']
+  }
+
+  return nextQuery
+}
 
 const pickLogo = (images) => {
   const logos = images?.logos || []
@@ -108,20 +136,39 @@ exports.getTVShelf = async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid TV shelf' })
     }
 
-    if (shelf.type === 'trending') {
-      const page = Math.max(1, parseInt(req.query.page, 10) || 1)
-      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 40)
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 40)
+    const sort = req.query.sort ? String(req.query.sort).trim() : null
+    const search = String(req.query.q || req.query.search || '').trim()
+
+    if (shelf.type === 'trending' && !req.query.sort) {
       const data = await getTrendingShows(limit, page)
       return res.json({
         shelf: { key: shelfKey, label: shelf.label },
+        sort: 'trending',
         ...data,
       })
     }
 
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 40)
+    if (search.length >= 2) {
+      const data = await buildShelfSearchResponse({
+        query: sort ? applyTVSort(shelf.query, sort, { includeVoteFloor: false }) : shelf.query,
+        search,
+        page,
+        limit,
+        shelfKey,
+      })
+
+      return res.json({
+        shelf: { key: shelfKey, label: shelf.label },
+        sort: sort ? (TV_SORT_QUERIES[sort] ? sort : 'topRated') : null,
+        search,
+        ...data,
+      })
+    }
+
     const data = await buildDiscoverResponse({
-      query: shelf.query,
+      query: sort ? applyTVSort(shelf.query, sort) : shelf.query,
       page,
       limit,
       shelfKey,
@@ -129,6 +176,7 @@ exports.getTVShelf = async (req, res, next) => {
 
     return res.json({
       shelf: { key: shelfKey, label: shelf.label },
+      sort: sort ? (TV_SORT_QUERIES[sort] ? sort : 'topRated') : null,
       ...data,
     })
   } catch (err) {
