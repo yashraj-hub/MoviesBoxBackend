@@ -3,9 +3,98 @@ const TVShowCache = require('../models/TVShowCache');
 const User = require('../models/User');
 const DailyWatchStat = require('../models/DailyWatchStat');
 const HiddenContinueWatching = require('../models/HiddenContinueWatching');
+const mongoose = require('mongoose');
 const { tmdbFetch, syncIfNeeded, saveToCache, TMDB_IMG_BASE, TMDB_IMG_BACKDROP } = require('../services/tmdb.service');
 const { saveShowsToCache, toShowResponse } = require('../services/tvDiscovery.service');
 const { trackEvent } = require('../services/activity.service');
+
+const AUTH_BG_CACHE_TTL_MS = 15 * 60 * 1000;
+const AUTH_BG_STALE_MS = 6 * 60 * 60 * 1000;
+let authBackgroundCache = { results: [], fetchedAt: 0 };
+let authBackgroundRefresh = null;
+
+const withTimeout = (promise, ms, fallback) => new Promise((resolve) => {
+  const timer = setTimeout(() => resolve(fallback), ms);
+  Promise.resolve(promise)
+    .then((value) => resolve(value))
+    .catch(() => resolve(fallback))
+    .finally(() => clearTimeout(timer));
+});
+
+const formatAuthBackgrounds = (movies) => {
+  const seen = new Set();
+  const results = [];
+
+  for (const movie of movies || []) {
+    const rawBackdrop = movie?.backdropPath || movie?.backdrop_path;
+    if (!rawBackdrop) continue;
+
+    const id = movie.tmdbId || movie.id || rawBackdrop;
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    results.push({
+      id,
+      title: movie.title || movie.name || 'MoviesBox',
+      backdrop_path: rawBackdrop.startsWith('http') ? rawBackdrop : `${TMDB_IMG_BACKDROP}${rawBackdrop}`,
+    });
+  }
+
+  return results.slice(0, 10);
+};
+
+const loadAuthBackgrounds = async () => {
+  let movies = [];
+
+  if (mongoose.connection.readyState === 1) {
+    movies = await withTimeout(
+      MovieCache.aggregate([
+        { $match: { backdropPath: { $ne: null, $exists: true }, voteAverage: { $gte: 7 } } },
+        { $sample: { size: 10 } },
+      ]).option({ maxTimeMS: 1500 }),
+      1800,
+      [],
+    );
+  }
+
+  if (movies.length < 3) {
+    const data = await withTimeout(tmdbFetch('trending/movie/day'), 2500, null);
+    const tmdbMovies = (data?.results || [])
+      .filter((movie) => movie.backdrop_path)
+      .slice(0, 10)
+      .map((movie) => ({
+        tmdbId: movie.id,
+        title: movie.title,
+        backdropPath: movie.backdrop_path,
+      }));
+
+    const seen = new Set(movies.map((movie) => movie.tmdbId || movie.id).filter(Boolean));
+    for (const movie of tmdbMovies) {
+      if (seen.has(movie.tmdbId)) continue;
+      seen.add(movie.tmdbId);
+      movies.push(movie);
+    }
+  }
+
+  return formatAuthBackgrounds(movies);
+};
+
+const refreshAuthBackgroundCache = () => {
+  if (authBackgroundRefresh) return authBackgroundRefresh;
+
+  authBackgroundRefresh = loadAuthBackgrounds()
+    .then((results) => {
+      if (results.length) {
+        authBackgroundCache = { results, fetchedAt: Date.now() };
+      }
+      return authBackgroundCache.results;
+    })
+    .finally(() => {
+      authBackgroundRefresh = null;
+    });
+
+  return authBackgroundRefresh;
+};
 
 const toMovieResponse = (m) => ({
   tmdbId: m.tmdbId,
@@ -486,46 +575,28 @@ exports.search = async (req, res, next) => {
 
 exports.getAuthBackgrounds = async (req, res, next) => {
   try {
-    const TMDB_ORIGINAL = 'https://image.tmdb.org/t/p/original'
+    const now = Date.now()
+    const cacheAge = now - authBackgroundCache.fetchedAt
+    const hasCache = authBackgroundCache.results.length > 0
 
-    // 1. Try DB — only movies with backdropPath
-    let movies = await MovieCache.aggregate([
-      { $match: { backdropPath: { $ne: null, $exists: true }, voteAverage: { $gte: 7 } } },
-      { $sample: { size: 10 } }
-    ])
+    res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=1800')
 
-    // 2. DB empty or not enough — fetch from TMDB trending
-    if (movies.length < 3) {
-      const data = await tmdbFetch('trending/movie/day')
-      if (data.results?.length > 0) {
-        const tmdbMovies = data.results
-          .filter(m => m.backdrop_path)
-          .slice(0, 10)
-          .map(m => ({
-            tmdbId: m.id,
-            title: m.title,
-            backdropPath: m.backdrop_path,
-          }))
-        // merge, dedupe by tmdbId
-        const seen = new Set(movies.map(m => m.tmdbId))
-        for (const m of tmdbMovies) {
-          if (!seen.has(m.tmdbId)) movies.push(m)
-        }
-      }
+    if (hasCache && cacheAge < AUTH_BG_CACHE_TTL_MS) {
+      return res.json({ results: authBackgroundCache.results, source: 'cache' })
     }
 
-    res.json({
-      results: movies.slice(0, 10).map(m => ({
-        id: m.tmdbId || m.id,
-        title: m.title,
-        backdrop_path: m.backdropPath
-          ? (m.backdropPath.startsWith('http') ? m.backdropPath : `${TMDB_ORIGINAL}${m.backdropPath}`)
-          : null,
-      })).filter(m => m.backdrop_path)
-    })
+    if (hasCache && cacheAge < AUTH_BG_STALE_MS) {
+      refreshAuthBackgroundCache().catch((error) => {
+        console.warn('[AuthBG Refresh Failed]', error.message)
+      })
+      return res.json({ results: authBackgroundCache.results, source: 'stale-cache' })
+    }
+
+    const results = await refreshAuthBackgroundCache()
+    res.json({ results, source: results.length ? 'fresh' : 'empty' })
   } catch (error) {
     console.error('[AuthBG Error]', error.message)
-    res.json({ results: [] })
+    res.json({ results: authBackgroundCache.results || [], source: 'error' })
   }
 }
 
