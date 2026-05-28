@@ -662,35 +662,108 @@ exports.getContinueWatching = async (req, res, next) => {
     const hidden = new Set(hiddenRows.map((r) => Number(r.tmdbId)).filter((n) => !Number.isNaN(n)))
 
     const seen = new Set()
-    const rawMovies = []
+    const rawItems = []
     for (const day of stats) {
       const movies = Array.isArray(day.movies) ? day.movies : []
       for (const m of movies) {
         const id = Number(m.tmdbId)
         if (!id || Number.isNaN(id) || seen.has(id) || hidden.has(id)) continue
         seen.add(id)
-        rawMovies.push(m)
-        if (rawMovies.length >= 20) break
+        rawItems.push(m)
+        if (rawItems.length >= 20) break
       }
-      if (rawMovies.length >= 20) break
+      if (rawItems.length >= 20) break
     }
 
-    // Fetch backdrops from cache
-    const ids = rawMovies.map((m) => m.tmdbId)
-    const cached = await MovieCache.find({ tmdbId: { $in: ids } })
-      .select('tmdbId backdropPath')
-      .lean()
-    const backdropMap = new Map(cached.map((c) => [c.tmdbId, c.backdropPath]))
+    // Split by mediaType
+    const movieItems = rawItems.filter(m => m.mediaType !== 'tv')
+    const tvItems = rawItems.filter(m => m.mediaType === 'tv')
 
-    const results = rawMovies.map((m) => ({
-      tmdbId: m.tmdbId,
-      title: m.title,
-      posterPath: m.posterUrl,
-      backdropPath: backdropMap.get(m.tmdbId) ? `${TMDB_IMG_BACKDROP}${backdropMap.get(m.tmdbId)}` : null,
-      watchSeconds: Math.max(0, Math.round(Number(m.watchSeconds) || 0)),
-    }))
+    // Fetch backdrops for movies
+    const movieIds = movieItems.map(m => m.tmdbId)
+    const cachedMovies = await MovieCache.find({ tmdbId: { $in: movieIds } }).select('tmdbId backdropPath').lean()
+    const movieBackdropMap = new Map(cachedMovies.map(c => [c.tmdbId, c.backdropPath]))
+
+    // Fetch backdrops for TV shows
+    const tvIds = tvItems.map(m => m.tmdbId)
+    const cachedTV = await TVShowCache.find({ tmdbId: { $in: tvIds } }).select('tmdbId backdropPath').lean()
+    const tvBackdropMap = new Map(cachedTV.map(c => [c.tmdbId, c.backdropPath]))
+
+    const results = rawItems.map((m) => {
+      const isTV = m.mediaType === 'tv'
+      const backdropRaw = isTV ? tvBackdropMap.get(m.tmdbId) : movieBackdropMap.get(m.tmdbId)
+      return {
+        tmdbId: m.tmdbId,
+        title: m.title,
+        mediaType: isTV ? 'tv' : 'movie',
+        posterPath: m.posterUrl,
+        backdropPath: backdropRaw ? `${TMDB_IMG_BACKDROP}${backdropRaw}` : null,
+        watchSeconds: Math.max(0, Math.round(Number(m.watchSeconds) || 0)),
+        season: m.season || null,
+        episode: m.episode || null,
+      }
+    })
 
     res.json({ results })
+  } catch (err) {
+    next(err)
+  }
+}
+
+exports.saveTVWatchProgress = async (req, res, next) => {
+  try {
+    const userId = String(req.user.sub)
+    const { tmdbId, title, posterUrl, watchSeconds, season, episode } = req.body || {}
+    const id = Number(tmdbId)
+    if (!id || Number.isNaN(id)) return res.status(400).json({ message: 'Invalid tmdbId' })
+
+    const IST_OFFSET_MINUTES = 330
+    const RETENTION_DAYS = 90
+    const now = new Date()
+    const shiftedMs = now.getTime() + IST_OFFSET_MINUTES * 60 * 1000
+    const shifted = new Date(shiftedMs)
+    const y = shifted.getUTCFullYear()
+    const mo = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+    const d = String(shifted.getUTCDate()).padStart(2, '0')
+    const dayKey = `${y}-${mo}-${d}`
+    const dayStartUtcMs = Date.UTC(y, shifted.getUTCMonth(), shifted.getUTCDate()) - IST_OFFSET_MINUTES * 60 * 1000
+    const dayStartAt = new Date(dayStartUtcMs)
+    const expiresAt = new Date(dayStartUtcMs + RETENTION_DAYS * 24 * 60 * 60 * 1000)
+    const delta = Math.max(0, Math.round(Number(watchSeconds) || 0))
+
+    // Remove old entry for this show, then push fresh one
+    await DailyWatchStat.updateOne(
+      { userId, dayKey },
+      {
+        $setOnInsert: { dayStartAt, expiresAt },
+        $pull: { movies: { tmdbId: id } },
+      },
+      { upsert: true },
+    )
+    await DailyWatchStat.updateOne(
+      { userId, dayKey },
+      {
+        $inc: { totalWatchSeconds: delta },
+        $push: {
+          movies: {
+            $each: [{
+              tmdbId: id,
+              title: title || '',
+              posterUrl: posterUrl || '',
+              watchSeconds: delta,
+              mediaType: 'tv',
+              season: season || null,
+              episode: episode || null,
+              originalLanguage: '',
+              genreIds: [],
+            }],
+            $position: 0,
+          },
+        },
+      },
+    )
+
+    res.json({ ok: true })
   } catch (err) {
     next(err)
   }

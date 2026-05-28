@@ -26,5 +26,6 @@ router.get('/movies/:tmdbId/related', authMiddleware, movieDetailController.getR
 router.patch('/movies/:tmdbId/flag', authMiddleware, canFlagOnly, adminController.flagMovie);
 router.get('/continue-watching', authMiddleware, movieController.getContinueWatching);
 router.post('/continue-watching/hide', authMiddleware, movieController.hideContinueWatching);
+router.post('/continue-watching/tv', authMiddleware, movieController.saveTVWatchProgress);
 
 module.exports = router;

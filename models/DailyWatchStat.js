@@ -9,6 +9,9 @@ const watchMovieSchema = new mongoose.Schema(
     watchSeconds: { type: Number, default: 0 },
     originalLanguage: { type: String, default: '' },
     genreIds: { type: [Number], default: [] },
+    mediaType: { type: String, enum: ['movie', 'tv'], default: 'movie' },
+    season: { type: Number, default: null },
+    episode: { type: Number, default: null },
   },
   { _id: false },
 )
