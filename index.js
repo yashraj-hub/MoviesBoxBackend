@@ -21,6 +21,7 @@ connectDB();
 // Middleware
 const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:5173',
+  'http://localhost:5174', // Allow local dev on alternative port
 ];
 app.use(cors({
   origin: function (origin, callback) {
